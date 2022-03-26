@@ -2815,6 +2815,14 @@ library SafeERC20 {
     }
 }
 
+interface IRewardDistributor {
+    function safeRewardTransfer(
+        address _token,
+        uint256 _amount,
+        address _to
+    ) external returns (uint256);
+}
+
 pragma solidity ^0.8.0;
 
 contract NftStaking is ReentrancyGuard, Pausable, Ownable, IERC721Receiver {
@@ -2829,6 +2837,9 @@ contract NftStaking is ReentrancyGuard, Pausable, Ownable, IERC721Receiver {
     /** Reward per block */
     uint256 public _rewardPerBlock = 1 ether;
 
+    // Reward distributor
+    IRewardDistributor public _rewardDistributor;
+
     struct UserInfo {
         EnumerableSet.UintSet stakedNfts;
         uint256 rewards;
@@ -2837,32 +2848,33 @@ contract NftStaking is ReentrancyGuard, Pausable, Ownable, IERC721Receiver {
 
     // Info of each user that stakes LP tokens.
     mapping(address => UserInfo) private _userInfo;
-
-    event RewardTokenUpdated(address oldToken, address newToken);
+    
     event RewardPerBlockUpdated(uint256 oldValue, uint256 newValue);
     event Staked(address indexed account, uint256 tokenId);
     event Withdrawn(address indexed account, uint256 tokenId);
     event Harvested(address indexed account, uint256 amount);
-    event InsufficientRewardToken(
-        address indexed account,
-        uint256 amountNeeded,
-        uint256 balance
-    );
-
+    
     constructor(
-        address __rewardTokenAddress,
-        address __stakeNftAddress,
-        uint256 __rewardPerBlock
+        address rewardTokenAddress_,
+        address stakeNftAddress_,
+        IRewardDistributor rewardDistributor_,
+        uint256 rewardPerBlock_
     ) {
-        IERC20(__rewardTokenAddress).balanceOf(address(this));
-        IERC721(__stakeNftAddress).balanceOf(address(this));
+        IERC20(rewardTokenAddress_).balanceOf(address(this));
+        IERC721(stakeNftAddress_).balanceOf(address(this));
+        require(
+            address(rewardDistributor_) != address(0),
+            "Invalid reward distributor"
+        );
+        require(rewardPerBlock_ > 0, "Invalid reward per block");
 
-        _stakeNftAddress = __stakeNftAddress;
-        _rewardTokenAddress = __rewardTokenAddress;
-        _rewardPerBlock = __rewardPerBlock;
+        _stakeNftAddress = stakeNftAddress_;
+        _rewardTokenAddress = rewardTokenAddress_;
+        _rewardPerBlock = rewardPerBlock_;
+        _rewardDistributor = rewardDistributor_;
     }
 
-    function viewUserInfo(address __account)
+    function viewUserInfo(address account_)
         external
         view
         returns (
@@ -2871,7 +2883,7 @@ contract NftStaking is ReentrancyGuard, Pausable, Ownable, IERC721Receiver {
             uint256 lastRewardBlock
         )
     {
-        UserInfo storage user = _userInfo[__account];
+        UserInfo storage user = _userInfo[account_];
         rewards = user.rewards;
         lastRewardBlock = user.lastRewardBlock;
         uint256 countNfts = user.stakedNfts.length();
@@ -2882,65 +2894,57 @@ contract NftStaking is ReentrancyGuard, Pausable, Ownable, IERC721Receiver {
             stakedNfts = new uint256[](countNfts);
             uint256 index;
             for (index = 0; index < countNfts; index++) {
-                stakedNfts[index] = tokenOfOwnerByIndex(__account, index);
+                stakedNfts[index] = tokenOfOwnerByIndex(account_, index);
             }
         }
     }
 
-    function tokenOfOwnerByIndex(address __account, uint256 __index)
+    function tokenOfOwnerByIndex(address account_, uint256 index_)
         public
         view
         returns (uint256)
     {
-        UserInfo storage user = _userInfo[__account];
-        return user.stakedNfts.at(__index);
+        UserInfo storage user = _userInfo[account_];
+        return user.stakedNfts.at(index_);
     }
 
-    function userStakedNFTCount(address __account)
+    function userStakedNFTCount(address account_)
         public
         view
         returns (uint256)
     {
-        UserInfo storage user = _userInfo[__account];
+        UserInfo storage user = _userInfo[account_];
         return user.stakedNfts.length();
     }
 
-    function updateRewardTokenAddress(address __rewardTokenAddress)
-        external
-        onlyOwner
-    {
-        IERC20(__rewardTokenAddress).balanceOf(address(this));
-        emit RewardTokenUpdated(_rewardTokenAddress, __rewardTokenAddress);
-        _rewardTokenAddress = __rewardTokenAddress;
+    function updateRewardPerBlock(uint256 rewardPerBlock_) external onlyOwner {
+        require(rewardPerBlock_ > 0, "Invalid reward per block");
+        emit RewardPerBlockUpdated(_rewardPerBlock, rewardPerBlock_);
+        _rewardPerBlock = rewardPerBlock_;
     }
 
-    function updateRewardPerBlock(uint256 __rewardPerBlock) external onlyOwner {
-        emit RewardPerBlockUpdated(_rewardPerBlock, __rewardPerBlock);
-        _rewardPerBlock = __rewardPerBlock;
-    }
-
-    function isStaked(address __account, uint256 __tokenId)
+    function isStaked(address account_, uint256 tokenId_)
         public
         view
         returns (bool)
     {
-        UserInfo storage user = _userInfo[__account];
-        return user.stakedNfts.contains(__tokenId);
+        UserInfo storage user = _userInfo[account_];
+        return user.stakedNfts.contains(tokenId_);
     }
 
-    function pendingRewards(address __account) public view returns (uint256) {
-        UserInfo storage user = _userInfo[__account];
+    function pendingRewards(address account_) public view returns (uint256) {
+        UserInfo storage user = _userInfo[account_];
 
         uint256 amount = block
             .number
             .sub(user.lastRewardBlock)
-            .mul(userStakedNFTCount(__account))
+            .mul(userStakedNFTCount(account_))
             .mul(_rewardPerBlock);
 
         return user.rewards.add(amount);
     }
 
-    function stake(uint256[] memory tokenIdList)
+    function stake(uint256[] memory tokenIdList_)
         external
         nonReentrant
         whenNotPaused
@@ -2964,21 +2968,21 @@ contract NftStaking is ReentrancyGuard, Pausable, Ownable, IERC721Receiver {
             emit Harvested(_msgSender(), amountSent);
         }
 
-        for (uint256 i = 0; i < tokenIdList.length; i++) {
+        for (uint256 i = 0; i < tokenIdList_.length; i++) {
             IERC721(_stakeNftAddress).safeTransferFrom(
                 _msgSender(),
                 address(this),
-                tokenIdList[i]
+                tokenIdList_[i]
             );
 
-            user.stakedNfts.add(tokenIdList[i]);
+            user.stakedNfts.add(tokenIdList_[i]);
 
-            emit Staked(_msgSender(), tokenIdList[i]);
+            emit Staked(_msgSender(), tokenIdList_[i]);
         }
         user.lastRewardBlock = block.number;
     }
 
-    function withdraw(uint256[] memory tokenIdList) external nonReentrant {
+    function withdraw(uint256[] memory tokenIdList_) external nonReentrant {
         UserInfo storage user = _userInfo[_msgSender()];
         uint256 pendingAmount = pendingRewards(_msgSender());
         if (pendingAmount > 0) {
@@ -2990,42 +2994,49 @@ contract NftStaking is ReentrancyGuard, Pausable, Ownable, IERC721Receiver {
             emit Harvested(_msgSender(), amountSent);
         }
 
-        for (uint256 i = 0; i < tokenIdList.length; i++) {
-            require(tokenIdList[i] > 0, "Invaild token id");
+        for (uint256 i = 0; i < tokenIdList_.length; i++) {
+            require(tokenIdList_[i] > 0, "Invaild token id");
 
             require(
-                isStaked(_msgSender(), tokenIdList[i]),
+                isStaked(_msgSender(), tokenIdList_[i]),
                 "Not staked this nft"
             );
 
             IERC721(_stakeNftAddress).safeTransferFrom(
                 address(this),
                 _msgSender(),
-                tokenIdList[i]
+                tokenIdList_[i]
             );
 
-            user.stakedNfts.remove(tokenIdList[i]);
+            user.stakedNfts.remove(tokenIdList_[i]);
 
-            emit Withdrawn(_msgSender(), tokenIdList[i]);
+            emit Withdrawn(_msgSender(), tokenIdList_[i]);
         }
         user.lastRewardBlock = block.number;
     }
 
-    function safeRewardTransfer(address __to, uint256 __amount)
+    function safeRewardTransfer(address to_, uint256 amount_)
         internal
         returns (uint256)
     {
-        uint256 balance = IERC20(_rewardTokenAddress).balanceOf(address(this));
-        if (balance >= __amount) {
-            IERC20(_rewardTokenAddress).safeTransfer(__to, __amount);
-            return __amount;
-        }
+        return
+            _rewardDistributor.safeRewardTransfer(
+                address(_rewardTokenAddress),
+                amount_,
+                to_
+            );
+    }
 
-        if (balance > 0) {
-            IERC20(_rewardTokenAddress).safeTransfer(__to, balance);
-        }
-        emit InsufficientRewardToken(__to, __amount, balance);
-        return balance;
+    /**
+     * @notice Update reward distributor
+     * @dev Only owner can call this function
+     */
+    function updateRewardDistributor(address rewardDistributor_)
+        external
+        onlyOwner
+    {
+        require(rewardDistributor_ != address(0), "Invalid zero address");
+        _rewardDistributor = IRewardDistributor(rewardDistributor_);
     }
 
     function onERC721Received(

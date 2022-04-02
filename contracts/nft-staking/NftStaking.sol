@@ -2836,8 +2836,12 @@ contract NftStaking is ReentrancyGuard, Pausable, Ownable, IERC721Receiver {
     address public _rewardTokenAddress;
     /** Reward per block */
     uint256 public _rewardPerBlock = 1 ether;
-
-    // Reward distributor
+    /** Max NFTs that a user can stake */
+    uint256 public _maxNftsPerUser = 1;
+    /** Staking start & end block */
+    uint256 public _startBlock;
+    uint256 public _endBlock;
+    /** Reward distributor */
     IRewardDistributor public _rewardDistributor;
 
     struct UserInfo {
@@ -2848,16 +2852,18 @@ contract NftStaking is ReentrancyGuard, Pausable, Ownable, IERC721Receiver {
 
     // Info of each user that stakes LP tokens.
     mapping(address => UserInfo) private _userInfo;
-    
+
     event RewardPerBlockUpdated(uint256 oldValue, uint256 newValue);
     event Staked(address indexed account, uint256 tokenId);
     event Withdrawn(address indexed account, uint256 tokenId);
     event Harvested(address indexed account, uint256 amount);
-    
+
     constructor(
-        address rewardTokenAddress_,
         address stakeNftAddress_,
+        address rewardTokenAddress_,
         IRewardDistributor rewardDistributor_,
+        uint256 startBlock_,
+        uint256 endBlock_,
         uint256 rewardPerBlock_
     ) {
         IERC20(rewardTokenAddress_).balanceOf(address(this));
@@ -2867,11 +2873,21 @@ contract NftStaking is ReentrancyGuard, Pausable, Ownable, IERC721Receiver {
             "Invalid reward distributor"
         );
         require(rewardPerBlock_ > 0, "Invalid reward per block");
+        require(
+            startBlock_ <= endBlock_,
+            "Start block must be before end block"
+        );
+        require(
+            startBlock_ > block.number,
+            "Start block must be after current block"
+        );
 
         _stakeNftAddress = stakeNftAddress_;
         _rewardTokenAddress = rewardTokenAddress_;
         _rewardPerBlock = rewardPerBlock_;
         _rewardDistributor = rewardDistributor_;
+        _startBlock = startBlock_;
+        _endBlock = endBlock_;
     }
 
     function viewUserInfo(address account_)
@@ -2917,10 +2933,40 @@ contract NftStaking is ReentrancyGuard, Pausable, Ownable, IERC721Receiver {
         return user.stakedNfts.length();
     }
 
+    function updateMaxNftsPerUser(uint256 maxLimit_) external onlyOwner {
+        require(maxLimit_ > 0, "Invalid limit value");
+        _maxNftsPerUser = maxLimit_;
+    }
+
     function updateRewardPerBlock(uint256 rewardPerBlock_) external onlyOwner {
         require(rewardPerBlock_ > 0, "Invalid reward per block");
         emit RewardPerBlockUpdated(_rewardPerBlock, rewardPerBlock_);
         _rewardPerBlock = rewardPerBlock_;
+    }
+
+    function updateStartBlock(uint256 startBlock_) external onlyOwner {
+        require(
+            startBlock_ <= _endBlock,
+            "Start block must be before end block"
+        );
+        require(
+            startBlock_ > block.number,
+            "Start block must be after current block"
+        );
+        require(_startBlock > block.number, "Staking started already");
+        _startBlock = startBlock_;
+    }
+
+    function updateEndBlock(uint256 endBlock_) external onlyOwner {
+        require(
+            endBlock_ >= _startBlock,
+            "End block must be after start block"
+        );
+        require(
+            endBlock_ > block.number,
+            "End block must be after current block"
+        );
+        _endBlock = endBlock_;
     }
 
     function isStaked(address account_, uint256 tokenId_)
@@ -2935,9 +2981,16 @@ contract NftStaking is ReentrancyGuard, Pausable, Ownable, IERC721Receiver {
     function pendingRewards(address account_) public view returns (uint256) {
         UserInfo storage user = _userInfo[account_];
 
-        uint256 amount = block
-            .number
-            .sub(user.lastRewardBlock)
+        uint256 fromBlock = user.lastRewardBlock < _startBlock
+            ? _startBlock
+            : user.lastRewardBlock;
+        uint256 toBlock = block.number < _endBlock ? block.number : _endBlock;
+        if (toBlock < fromBlock) {
+            return user.rewards;
+        }
+
+        uint256 amount = toBlock
+            .sub(fromBlock)
             .mul(userStakedNFTCount(account_))
             .mul(_rewardPerBlock);
 
@@ -2956,6 +3009,12 @@ contract NftStaking is ReentrancyGuard, Pausable, Ownable, IERC721Receiver {
             ),
             "Not approve nft to staker address"
         );
+        uint256 countToStake = tokenIdList_.length;
+        require(
+            userStakedNFTCount(_msgSender()).add(countToStake) <=
+                _maxNftsPerUser,
+            "Exceeds the max limit per user"
+        );
 
         UserInfo storage user = _userInfo[_msgSender()];
         uint256 pendingAmount = pendingRewards(_msgSender());
@@ -2968,7 +3027,7 @@ contract NftStaking is ReentrancyGuard, Pausable, Ownable, IERC721Receiver {
             emit Harvested(_msgSender(), amountSent);
         }
 
-        for (uint256 i = 0; i < tokenIdList_.length; i++) {
+        for (uint256 i = 0; i < countToStake; i++) {
             IERC721(_stakeNftAddress).safeTransferFrom(
                 _msgSender(),
                 address(this),
@@ -2994,7 +3053,8 @@ contract NftStaking is ReentrancyGuard, Pausable, Ownable, IERC721Receiver {
             emit Harvested(_msgSender(), amountSent);
         }
 
-        for (uint256 i = 0; i < tokenIdList_.length; i++) {
+        uint256 countToWithdraw = tokenIdList_.length;
+        for (uint256 i = 0; i < countToWithdraw; i++) {
             require(tokenIdList_[i] > 0, "Invaild token id");
 
             require(

@@ -1570,7 +1570,10 @@ contract UnseaNft is ERC721Enumerable, Ownable {
         returns (string memory)
     {
         require(_exists(tokenId), "Token does not exist");
-        return _tokenBaseURI;
+        return
+            bytes(_tokenBaseURI).length > 0
+                ? string(abi.encodePacked(_tokenBaseURI, tokenId.toString()))
+                : "";
     }
 
     function withdraw() external onlyOwner {

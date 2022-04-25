@@ -2834,10 +2834,15 @@ contract NftStaking is ReentrancyGuard, Pausable, Ownable, IERC721Receiver {
     address public _stakeNftAddress;
     /** Reward Token address */
     address public _rewardTokenAddress;
+    /** Fee address */
+    address payable public _feeAddress;
     /** Reward per block */
     uint256 public _rewardPerBlock = 1 ether;
     /** Max NFTs that a user can stake */
     uint256 public _maxNftsPerUser = 1;
+    /** Deposit / Withdraw fee */
+    uint256 public _depositFeePerNft = 0.025 ether;
+    uint256 public _withdrawFeePerNft = 0.025 ether;
     /** Staking start & end block */
     uint256 public _startBlock;
     uint256 public _endBlock;
@@ -2861,6 +2866,7 @@ contract NftStaking is ReentrancyGuard, Pausable, Ownable, IERC721Receiver {
     constructor(
         address stakeNftAddress_,
         address rewardTokenAddress_,
+        address payable feeAddress_,
         IRewardDistributor rewardDistributor_,
         uint256 startBlock_,
         uint256 endBlock_,
@@ -2884,8 +2890,9 @@ contract NftStaking is ReentrancyGuard, Pausable, Ownable, IERC721Receiver {
 
         _stakeNftAddress = stakeNftAddress_;
         _rewardTokenAddress = rewardTokenAddress_;
-        _rewardPerBlock = rewardPerBlock_;
+        _feeAddress = feeAddress_;
         _rewardDistributor = rewardDistributor_;
+        _rewardPerBlock = rewardPerBlock_;
         _startBlock = startBlock_;
         _endBlock = endBlock_;
     }
@@ -2933,17 +2940,53 @@ contract NftStaking is ReentrancyGuard, Pausable, Ownable, IERC721Receiver {
         return user.stakedNfts.length();
     }
 
+    /**
+     * @dev Update fee address
+     * Only owner has privilege to call this function
+     */
+    function updateFeeAddress(address payable feeAddress_) external onlyOwner {
+        _feeAddress = feeAddress_;
+    }
+
+    /**
+     * @dev Update deposit fee per nft
+     * Only owner has privilege to call this function
+     */
+    function updateDepositFeePerNft(uint256 depositFee_) external onlyOwner {
+        _depositFeePerNft = depositFee_;
+    }
+
+    /**
+     * @dev Update withdraw fee per nft
+     * Only owner has privilege to call this function
+     */
+    function updateWithdrawFeePerNft(uint256 withdrawFee_) external onlyOwner {
+        _withdrawFeePerNft = withdrawFee_;
+    }
+
+    /**
+     * @dev Update max nft count available per user
+     * Only owner has privilege to call this function
+     */
     function updateMaxNftsPerUser(uint256 maxLimit_) external onlyOwner {
         require(maxLimit_ > 0, "Invalid limit value");
         _maxNftsPerUser = maxLimit_;
     }
 
+    /**
+     * @dev Update reward per block, per nft
+     * Only owner has privilege to call this function
+     */
     function updateRewardPerBlock(uint256 rewardPerBlock_) external onlyOwner {
         require(rewardPerBlock_ > 0, "Invalid reward per block");
         emit RewardPerBlockUpdated(_rewardPerBlock, rewardPerBlock_);
         _rewardPerBlock = rewardPerBlock_;
     }
 
+    /**
+     * @dev Update start block number
+     * Only owner has privilege to call this function
+     */
     function updateStartBlock(uint256 startBlock_) external onlyOwner {
         require(
             startBlock_ <= _endBlock,
@@ -2957,6 +3000,10 @@ contract NftStaking is ReentrancyGuard, Pausable, Ownable, IERC721Receiver {
         _startBlock = startBlock_;
     }
 
+    /**
+     * @dev Update end block number
+     * Only owner has privilege to call this function
+     */
     function updateEndBlock(uint256 endBlock_) external onlyOwner {
         require(
             endBlock_ >= _startBlock,
@@ -2969,6 +3016,21 @@ contract NftStaking is ReentrancyGuard, Pausable, Ownable, IERC721Receiver {
         _endBlock = endBlock_;
     }
 
+    /**
+     * @notice Update reward distributor
+     * @dev Only owner can call this function
+     */
+    function updateRewardDistributor(address rewardDistributor_)
+        external
+        onlyOwner
+    {
+        require(rewardDistributor_ != address(0), "Invalid zero address");
+        _rewardDistributor = IRewardDistributor(rewardDistributor_);
+    }
+
+    /**
+     * @dev Check if the user staked the nft of token id
+     */
     function isStaked(address account_, uint256 tokenId_)
         public
         view
@@ -2978,6 +3040,9 @@ contract NftStaking is ReentrancyGuard, Pausable, Ownable, IERC721Receiver {
         return user.stakedNfts.contains(tokenId_);
     }
 
+    /**
+     * @dev Get pending reward amount for the account
+     */
     function pendingRewards(address account_) public view returns (uint256) {
         UserInfo storage user = _userInfo[account_];
 
@@ -2997,8 +3062,12 @@ contract NftStaking is ReentrancyGuard, Pausable, Ownable, IERC721Receiver {
         return user.rewards.add(amount);
     }
 
+    /**
+     * @dev Stake nft token ids
+     */
     function stake(uint256[] memory tokenIdList_)
         external
+        payable
         nonReentrant
         whenNotPaused
     {
@@ -3027,6 +3096,14 @@ contract NftStaking is ReentrancyGuard, Pausable, Ownable, IERC721Receiver {
             emit Harvested(_msgSender(), amountSent);
         }
 
+        if (countToStake > 0 && _depositFeePerNft > 0) {
+            require(
+                msg.value >= countToStake.mul(_depositFeePerNft),
+                "Insufficient deposit fee"
+            );
+            _feeAddress.transfer(address(this).balance);
+        }
+
         for (uint256 i = 0; i < countToStake; i++) {
             IERC721(_stakeNftAddress).safeTransferFrom(
                 _msgSender(),
@@ -3041,7 +3118,14 @@ contract NftStaking is ReentrancyGuard, Pausable, Ownable, IERC721Receiver {
         user.lastRewardBlock = block.number;
     }
 
-    function withdraw(uint256[] memory tokenIdList_) external nonReentrant {
+    /**
+     * @dev Withdraw nft token ids
+     */
+    function withdraw(uint256[] memory tokenIdList_)
+        external
+        payable
+        nonReentrant
+    {
         UserInfo storage user = _userInfo[_msgSender()];
         uint256 pendingAmount = pendingRewards(_msgSender());
         if (pendingAmount > 0) {
@@ -3054,9 +3138,16 @@ contract NftStaking is ReentrancyGuard, Pausable, Ownable, IERC721Receiver {
         }
 
         uint256 countToWithdraw = tokenIdList_.length;
-        for (uint256 i = 0; i < countToWithdraw; i++) {
-            require(tokenIdList_[i] > 0, "Invaild token id");
 
+        if (countToWithdraw > 0 && _withdrawFeePerNft > 0) {
+            require(
+                msg.value >= countToWithdraw.mul(_withdrawFeePerNft),
+                "Insufficient withdraw fee"
+            );
+            _feeAddress.transfer(address(this).balance);
+        }
+
+        for (uint256 i = 0; i < countToWithdraw; i++) {
             require(
                 isStaked(_msgSender(), tokenIdList_[i]),
                 "Not staked this nft"
@@ -3075,6 +3166,9 @@ contract NftStaking is ReentrancyGuard, Pausable, Ownable, IERC721Receiver {
         user.lastRewardBlock = block.number;
     }
 
+    /**
+     * @dev Safe transfer reward to the receiver
+     */
     function safeRewardTransfer(address to_, uint256 amount_)
         internal
         returns (uint256)
@@ -3088,15 +3182,14 @@ contract NftStaking is ReentrancyGuard, Pausable, Ownable, IERC721Receiver {
     }
 
     /**
-     * @notice Update reward distributor
-     * @dev Only owner can call this function
+     * @notice It allows the admin to recover wrong tokens sent to the contract
+     * @dev This function is only callable by admin.
      */
-    function updateRewardDistributor(address rewardDistributor_)
+    function recoverWrongTokens(address token_, uint256 amount_)
         external
         onlyOwner
     {
-        require(rewardDistributor_ != address(0), "Invalid zero address");
-        _rewardDistributor = IRewardDistributor(rewardDistributor_);
+        IERC20(token_).safeTransfer(_msgSender(), amount_);
     }
 
     function onERC721Received(
@@ -3107,4 +3200,9 @@ contract NftStaking is ReentrancyGuard, Pausable, Ownable, IERC721Receiver {
     ) public virtual override returns (bytes4) {
         return this.onERC721Received.selector;
     }
+
+    /**
+     * @dev To receive ETH
+     */
+    receive() external payable {}
 }

@@ -650,13 +650,55 @@ abstract contract Ownable is Context {
     }
 }
 
+// File: contracts\libs\IIDOReferral.sol
+
+interface IIDOReferral {
+    /**
+     * @dev Record referral.
+     */
+    function recordReferrer(address _account, address _referrer) external;
+
+    /**
+     * @dev Record referral reward.
+     */
+    function addReferralReward(address _referrer, uint256 _reward) external;
+
+    /**
+     * @notice Check if a user has referrer
+     */
+    function hasReferrer(address _user) external view returns (bool);
+
+    /**
+     * @dev Get the account that referred the user.
+     */
+    function getReferrer(address _account) external view returns (address);
+
+    /**
+     * @dev Get the total earned of a referrer
+     */
+    function getReferrerEarned(address _account)
+        external
+        view
+        returns (uint256);
+
+    /**
+     * @notice Get referred users count by an account
+     */
+    function getReferredUserCount(address _account)
+        external
+        view
+        returns (uint256);
+}
+
 contract UnseaIDO is Ownable {
     using SafeMath for uint256;
     using SafeERC20 for IERC20;
 
     IERC20 public immutable idoToken;
+    IIDOReferral public idoReferral;
     address payable public idoCollector;
 
+    uint16 public referFee = 100; // Referral commission fee 1% default
     uint256 public startDate = 1650744000; // When to start IDO - Apr 24, 2022 00:00:00 GST
     uint256 public endDate = 1653253200; // When to end IDO - May 23, 2022 01:00:00 GST
 
@@ -674,11 +716,137 @@ contract UnseaIDO is Ownable {
     uint256 public totalContributed; // Total contributed amount in buy token
     mapping(address => ContributeData) public contributedPerUser; // User contributed amount in buy token
 
-    constructor(IERC20 _idoToken, address payable _idoCollector) {
+    bool public disabledManualContribute = false; // For the contributors from the previous IDO contract
+
+    constructor(
+        IERC20 _idoToken,
+        IIDOReferral _idoReferral,
+        address payable _idoCollector
+    ) {
         _idoToken.balanceOf(address(this)); // To check the IERC20 contract
+        require(address(_idoReferral) != address(0), "Invalid IDO referral");
         require(_idoCollector != address(0), "Invalid IDO collector");
         idoToken = _idoToken;
+        idoReferral = _idoReferral;
         idoCollector = _idoCollector;
+
+        // Add contributors from the previous IDO
+        addPreviousContributors(
+            0xbF3277a46e11e7717eaC2b3508Ebc965a07CA607,
+            1 ether
+        );
+        addPreviousContributors(
+            0xBd509F7C06E1815d4e57DF213254ab6032EE88C5,
+            0.63 ether
+        );
+        addPreviousContributors(
+            0x4dA6DdCd3B732207b5E6931f4C4852D5aBFC213B,
+            5 ether
+        );
+        addPreviousContributors(
+            0x44a89C54c918A21e07Bc3E0A4a154a22cf1473aE,
+            5 ether
+        );
+        addPreviousContributors(
+            0xDE9aC37abC76b82A051830a53ea45625eb9BeAd0,
+            0.5 ether
+        );
+        addPreviousContributors(
+            0xD629Dadf06119187e48749F003807849c757B8E1,
+            5 ether
+        );
+        addPreviousContributors(
+            0x2d4f89C82Ed1A97cafa3300931E5CB148bF26d8c,
+            5 ether
+        );
+        addPreviousContributors(
+            0x0CbD0d52129d2B4067E5605cCF116ec8A686C626,
+            3.1 ether
+        );
+        addPreviousContributors(
+            0x7c88C155478e34934AeB59691451Ae12D3BC325A,
+            3 ether
+        );
+        addPreviousContributors(
+            0xDE9aC37abC76b82A051830a53ea45625eb9BeAd0,
+            0.5 ether
+        );
+        addPreviousContributors(
+            0x0Db7F892445417e6E67467bAd910F851CC951444,
+            5 ether
+        );
+        addPreviousContributors(
+            0x6A59A0c10414EAA315D14ad34B1c8BabCe32FD6f,
+            5 ether
+        );
+        addPreviousContributors(
+            0x93A57913DCfBb69A5da8d2BFc8d6B16981b16545,
+            5 ether
+        );
+        addPreviousContributors(
+            0xCC6C82E58F39ff441e19B920A1fA1e56F102aB18,
+            5 ether
+        );
+        addPreviousContributors(
+            0xf009cB8115Bf00eD22A7B86959dcb3fD641c93CD,
+            5 ether
+        );
+        addPreviousContributors(
+            0x914fCfe4B622FE0802712217Cc23f1326ee072a3,
+            5 ether
+        );
+        addPreviousContributors(
+            0x5eAA83309074e97D60830fd6A6590D8C1DFB89D9,
+            5 ether
+        );
+        addPreviousContributors(
+            0xB23F360cd4c220c1A6489fD73BBbfCcc3fdc7b22,
+            5 ether
+        );
+        addPreviousContributors(
+            0x8fb0580045C0b01271716644CE2cC755bA46d6D5,
+            5 ether
+        );
+        addPreviousContributors(
+            0x498aa5fafF11Aa0Fe510ccD71D27A14D4110ec21,
+            0.2 ether
+        );
+        addPreviousContributors(
+            0x9663047cFD351F0cFB34Ef985aF767E0f9c16d29,
+            0.3 ether
+        );
+        addPreviousContributors(
+            0xa9fF448d3785DAB382B5EA19497a3e60b8d9d6C4,
+            0.11 ether
+        );
+        addPreviousContributors(
+            0x2Ac2c4924D013072f267E06e871B6C56BB29aa94,
+            0.123 ether
+        );
+        addPreviousContributors(
+            0xDE9aC37abC76b82A051830a53ea45625eb9BeAd0,
+            0.5 ether
+        );
+    }
+
+    /**
+     * @notice Add previous contributors
+     */
+    function addPreviousContributors(address contributor, uint256 amount)
+        public
+    {
+        require(!disabledManualContribute, "Manual contribution disabled");
+        contributedPerUser[contributor].amount = contributedPerUser[contributor]
+            .amount
+            .add(amount);
+        totalContributed = totalContributed.add(amount);
+    }
+
+    /**
+     * @notice Disable manual contribution
+     */
+    function disableManualContribute() external onlyOwner {
+        disabledManualContribute = true;
     }
 
     receive() external payable {}
@@ -686,7 +854,7 @@ contract UnseaIDO is Ownable {
     /**
      * @notice Contribute IDO with ETH
      */
-    function contribute() external payable {
+    function contribute(address referrer) external payable {
         require(
             block.timestamp >= startDate && block.timestamp < endDate,
             "IDO not opened"
@@ -712,6 +880,25 @@ contract UnseaIDO is Ownable {
 
         require(totalContributed <= hardcap, "Reached hardcap");
         idoCollector.transfer(contributeAmount);
+
+        // Record referrer
+        address currentReferrer = idoReferral.getReferrer(_msgSender());
+        if (!idoReferral.hasReferrer(_msgSender())) {
+            if (referrer == address(0) || referrer == _msgSender()) {
+                return;
+            }
+            idoReferral.recordReferrer(_msgSender(), referrer);
+            currentReferrer = referrer;
+        }
+
+        // Add referral commission to the referrer
+        uint256 referralCommission = contributeAmount.mul(referFee).div(10000);
+        if (referralCommission > 0) {
+            totalContributed = totalContributed.add(referralCommission);
+            contributedPerUser[currentReferrer].amount = contributedPerUser[
+                currentReferrer
+            ].amount.add(referralCommission);
+        }
     }
 
     /**
@@ -828,6 +1015,15 @@ contract UnseaIDO is Ownable {
     function setIDOCollector(address payable _newCollector) external onlyOwner {
         require(_newCollector != address(0), "Invalid IDO collector");
         idoCollector = _newCollector;
+    }
+
+    /**
+     * @notice Set referral fee
+     * @dev Only owner is allowed to run this function
+     */
+    function setReferFee(uint16 _referFee) external onlyOwner {
+        require(_referFee < 1000, "Invalid value");
+        referFee = _referFee;
     }
 
     /**
